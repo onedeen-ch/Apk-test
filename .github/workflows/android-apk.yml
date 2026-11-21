@@ -1,0 +1,25 @@
+name: Android debug APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'feature/**']
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter create --platforms=android,ios --project-name battle_tap --org ch.battletap .
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: battle-tap-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
