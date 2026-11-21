@@ -76,10 +76,18 @@ class _BattleHomeState extends State<BattleHome> {
   void play(bool ranked) {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
       BattleGame(ranked: ranked, skin: skins[equipped], best: ranked ? best : huntBest,
-        onFinish: (score) { if (mounted) setState(() {
-          if (ranked && score > best) best = score;
-          if (!ranked && score > huntBest) huntBest = score;
-        }); })));
+        onFinish: (score) {
+          if (mounted) {
+            setState(() {
+              if (ranked && score > best) {
+                best = score;
+              }
+              if (!ranked && score > huntBest) {
+                huntBest = score;
+              }
+            });
+          }
+        })));
   }
 
   @override
@@ -208,7 +216,7 @@ class _BattleGameState extends State<BattleGame> with SingleTickerProviderStateM
       duration = widget.ranked ? BattleRules.rankedSeconds : BattleRules.randomDuration(_rng);
       secondsLeft = duration.toDouble(); target = const Offset(0.5, 0.5); });
     _ticker = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) return;
+      if (!mounted) { return; }
       if (countdown > 1) { setState(() => countdown--); }
       else {
         timer.cancel(); _watch.start(); _lastMove = 0;
@@ -219,13 +227,13 @@ class _BattleGameState extends State<BattleGame> with SingleTickerProviderStateM
   }
 
   void _tick() {
-    if (!mounted || (phase != RoundPhase.playing && phase != RoundPhase.stop)) return;
+    if (!mounted || (phase != RoundPhase.playing && phase != RoundPhase.stop)) { return; }
     final elapsed = _watch.elapsedMilliseconds;
     if (phase == RoundPhase.playing) {
       final remaining = max(0, duration * 1000 - elapsed);
       if (remaining == 0) {
         setState(() { secondsLeft = 0; phase = widget.ranked ? RoundPhase.finished : RoundPhase.stop; });
-        if (widget.ranked) _finish();
+        if (widget.ranked) { _finish(); }
         return;
       }
       if (!widget.ranked && elapsed - _lastMove >= BattleRules.randomMoveMilliseconds) {
@@ -246,26 +254,26 @@ class _BattleGameState extends State<BattleGame> with SingleTickerProviderStateM
   }
 
   void _finish() {
-    if (phase == RoundPhase.finished && _ticker == null) return;
+    if (phase == RoundPhase.finished && _ticker == null) { return; }
     _ticker?.cancel(); _ticker = null; _watch.stop();
-    if (mounted) setState(() => phase = RoundPhase.finished);
+    if (mounted) { setState(() => phase = RoundPhase.finished); }
     widget.onFinish(score);
   }
 
   void _tapDown(PointerDownEvent event, Size arena, double diameter) {
-    if (_activePointer != null) return;
+    if (_activePointer != null) { return; }
     _activePointer = event.pointer;
     if (phase == RoundPhase.stop && !widget.ranked) {
       setState(() { lateTaps++; score -= BattleRules.lateTapPenalty; });
       return;
     }
-    if (phase != RoundPhase.playing) return;
+    if (phase != RoundPhase.playing) { return; }
     final center = widget.ranked ? Offset(arena.width / 2, arena.height / 2)
       : Offset(target.dx * arena.width, target.dy * arena.height);
     final isHit = (event.localPosition - center).distance <= diameter / 2;
     if (isHit) {
       setState(() { hits++; score++; });
-      if (!widget.ranked) _moveTarget(_watch.elapsedMilliseconds);
+      if (!widget.ranked) { _moveTarget(_watch.elapsedMilliseconds); }
     } else if (!widget.ranked) {
       setState(() => misses++);
     }
@@ -286,8 +294,8 @@ class _BattleGameState extends State<BattleGame> with SingleTickerProviderStateM
         return Listener(
           behavior: HitTestBehavior.opaque,
           onPointerDown: (e) => _tapDown(e, area, d),
-          onPointerUp: (e) { if (_activePointer == e.pointer) _activePointer = null; },
-          onPointerCancel: (e) { if (_activePointer == e.pointer) _activePointer = null; },
+          onPointerUp: (e) { if (_activePointer == e.pointer) { _activePointer = null; } },
+          onPointerCancel: (e) { if (_activePointer == e.pointer) { _activePointer = null; } },
           child: Stack(children: [
             if (phase == RoundPhase.playing) Positioned(
               left: px - d / 2, top: py - d / 2, width: d, height: d,
