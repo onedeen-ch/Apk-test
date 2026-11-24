@@ -1,0 +1,26 @@
+name: Android debug APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'feature/**']
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter create --platforms=android,ios --project-name battle_tap --org ch.battletap .
+      - run: flutter pub get
+      # Flutter 3.50 marks material.dart deprecated at info level; do not fail the APK build on informational diagnostics.
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test
+      - run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: battle-tap-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
