@@ -1,33 +1,44 @@
-# BATTLE TAP
+# BATTLE TAP – Pixel Arcade
 
-Competitive arcade / reaction mobile game.
+Flutter Android/iOS **local test version** for Battle Tap 1.1.
 
-## Current branch
+## New visual direction (24 November 2026)
 
-This branch contains a playable Flutter **local prototype** with two game modes and a shop catalogue.
+- Dark Gameboy-inspired pixel art UI: luminous sage/lime accents, deep forest-green panels, chunky framed arcade controls and backgrounds.
+- Fifteen individual **procedurally drawn** button skins: 5 Normal (coloured), 5 Epic (animated tech / elemental motifs) and 5 Legend (animated mythic silhouettes).
+- No plain circular epic/legend skins. The tap art changes, but the hit area does not.
+- Animated full-screen Golden Splash on a new **local** Tap Battle best result.
+- Both games retain their locked 1.1 rules.
+- Local best scores and statistics are persisted through shared_preferences.
+- Unverified online scores and paid skins are **not** falsely represented as live.
 
-### Locked game rules
+## Start the app
 
-- **TAP BATTLE:** 30.00 seconds, centred immovable button at **44%** of the available screen width, +1 point for each valid touch.
-- **RANDOM HUNT:** randomly chosen **18–60 seconds** with a visible countdown. Smaller target moves instantly on a hit, or automatically after **1.0 seconds** without a hit.
-- Misses do not count. For the **2-second stop phase**, every late tap applies **−2 points**.
-- Only TAP BATTLE should ever contribute to public ranked leaderboards.
+From this repo:
 
-### Build
-
-Requires Flutter SDK. Run:
-
-```bash
+\`\`\`sh
 flutter create --platforms=android,ios --project-name battle_tap --org ch.battletap .
 flutter pub get
 flutter test
 flutter run
-```
+\`\`\`
 
-A GitHub Actions debug-APK workflow is included.
+A GitHub Actions workflow runs Flutter analysis, tests and a debug APK build.
+Download the APK ZIP from the workflow's **Artifacts** section.
 
-### Incomplete production features
+## Locked game rules
 
-This is **not yet a release-ready product**. Firebase login, server-verified global/country/friends leaderboards, IAP purchase verification, actual paid skin unlocks, advanced golden-splash animation, and full anti-cheat safeguards remain to integrate. No fake rankings or unverified purchases are displayed. The 15 premium skins currently appear as locked catalogue entries.
+| Rule | Value |
+| --- | --- |
+| Tap Battle | 30 seconds |
+| Tap target | Centrally fixed, exactly 44% of logical screen width |
+| Random Hunt | Visible random 18–60 seconds timer |
+| Random movement | After every hit; otherwise at ~1,000 ms |
+| Wrong target | 0 points |
+| Stop phase | 2 seconds after time expires |
+| Late taps | −2 points each |
+| Public rankings | Tap Battle ONLY (not live until backend verification) |
 
-See the original GDD v1.1 for all product requirements.
+## Production work outstanding
+
+Firebase Authentication, identity and country verification, server-verified Ranked leaderboards, friend requests/challenges, Apple/Google IAP purchase verification and skin ownership, Play Integrity/App Attest security, final game graphics/art direction and full real-device testing. **This is not yet a production-ready app or a Play Store release.**

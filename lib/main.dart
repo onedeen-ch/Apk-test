@@ -1,337 +1,850 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() => runApp(const BattleTapApp());
+import 'gold_splash.dart';
+import 'pixel_ui.dart';
+import 'skins.dart';
 
-class BattleRules {
-  static const rankedSeconds = 30;
-  static const rankedButtonWidthRatio = 0.44;
-  static const randomMinSeconds = 18;
-  static const randomMaxSeconds = 60;
-  static const randomMoveMilliseconds = 1000;
-  static const stopSeconds = 2;
-  static const lateTapPenalty = 2;
-  static int randomDuration(Random rng) =>
-      randomMinSeconds + rng.nextInt(randomMaxSeconds - randomMinSeconds + 1);
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const BattleTapApp());
+}
+
+/// Locked Battle Tap 1.1 rules. No skin or animation may modify scoring.
+abstract final class BattleRules {
+  static const int rankedSeconds = 30;
+  static const double rankedButtonWidthRatio = .44;
+  static const int randomMinSeconds = 18;
+  static const int randomMaxSeconds = 60;
+  static const int randomMoveMilliseconds = 1000;
+  static const int stopSeconds = 2;
+  static const int lateTapPenalty = 2;
+
+  static int randomDuration(math.Random rng) =>
+      randomMinSeconds +
+      rng.nextInt(randomMaxSeconds - randomMinSeconds + 1);
+
   static int huntScore(int validTaps, int lateTaps) =>
       validTaps - lateTaps * lateTapPenalty;
 }
 
-class BattleSkin {
-  const BattleSkin(this.name, this.color, this.rarity, this.price);
-  final String name;
-  final Color color;
-  final String rarity;
-  final double price;
+class GameRecords extends ChangeNotifier {
+  int rankedBest = 0;
+  int huntBest = 0;
+  int rounds = 0;
+  int totalTaps = 0;
+  bool vibrationsEnabled = false;
+
+  Future<void> load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      rankedBest = prefs.getInt('battle_ranked_best') ?? 0;
+      huntBest = prefs.getInt('battle_hunt_best') ?? 0;
+      rounds = prefs.getInt('battle_rounds') ?? 0;
+      totalTaps = prefs.getInt('battle_total_taps') ?? 0;
+      vibrationsEnabled = prefs.getBool('battle_haptics') ?? false;
+      notifyListeners();
+    } catch (_) {
+      // In widget tests or platforms without the preferences plugin, the
+      // playable local prototype remains available with in-memory records.
+    }
+  }
+
+  Future<void> record({required bool ranked, required int score, required int hits}) async {
+    rounds += 1;
+    totalTaps += hits;
+    if (ranked) {
+      rankedBest = math.max(rankedBest, score);
+    } else {
+      huntBest = math.max(huntBest, score);
+    }
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt('battle_ranked_best', rankedBest);
+      await p.setInt('battle_hunt_best', huntBest);
+      await p.setInt('battle_rounds', rounds);
+      await p.setInt('battle_total_taps', totalTaps);
+    } catch (_) {}
+  }
+
+  Future<void> toggleVibration(bool value) async {
+    vibrationsEnabled = value;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('battle_haptics', value);
+    } catch (_) {}
+  }
 }
 
-const skins = <BattleSkin>[
-  BattleSkin('Classic', Color(0xFFDA2D4B), 'FREE', 0),
-  BattleSkin('Red Strike', Color(0xFFE83E50), 'NORMAL', 0.90),
-  BattleSkin('Ocean Blue', Color(0xFF1689F7), 'NORMAL', 0.90),
-  BattleSkin('Toxic Green', Color(0xFF39DB6B), 'NORMAL', 0.90),
-  BattleSkin('Royal Purple', Color(0xFF914CEB), 'NORMAL', 0.90),
-  BattleSkin('Golden Yellow', Color(0xFFFFCE36), 'NORMAL', 0.90),
-  BattleSkin('Neon Pulse', Color(0xFF02EFDF), 'EPIC', 2.90),
-  BattleSkin('Inferno Core', Color(0xFFFF5B32), 'EPIC', 2.90),
-  BattleSkin('Plasma Venom', Color(0xFF6FFF24), 'EPIC', 2.90),
-  BattleSkin('Thunder Violet', Color(0xFFB254FF), 'EPIC', 2.90),
-  BattleSkin('Frozen Prism', Color(0xFFB1EDFF), 'EPIC', 2.90),
-  BattleSkin('Solar Deity', Color(0xFFFFD05A), 'LEGEND', 5.90),
-  BattleSkin('Void Dragon', Color(0xFF7932C9), 'LEGEND', 5.90),
-  BattleSkin('Phoenix Heart', Color(0xFFFF542D), 'LEGEND', 5.90),
-  BattleSkin('Celestial Crown', Color(0xFFFFE9AF), 'LEGEND', 5.90),
-  BattleSkin('Cosmic Singularity', Color(0xFF6262F2), 'LEGEND', 5.90),
-];
-
-class BattleTapApp extends StatelessWidget {
+class BattleTapApp extends StatefulWidget {
   const BattleTapApp({super.key});
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'Battle Tap',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: const Color(0xFF0C101D),
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFFD466), brightness: Brightness.dark),
-      useMaterial3: true,
-    ),
-    home: const BattleHome(),
-  );
+  State<BattleTapApp> createState() => _BattleTapAppState();
 }
 
-class BattleHome extends StatefulWidget {
-  const BattleHome({super.key});
-  @override
-  State<BattleHome> createState() => _BattleHomeState();
-}
-
-class _BattleHomeState extends State<BattleHome> {
-  int tab = 0;
-  int equipped = 0;
-  int best = 0;
-  int huntBest = 0;
-  final owned = <int>{0};
-  void play(bool ranked) {
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
-      BattleGame(ranked: ranked, skin: skins[equipped], best: ranked ? best : huntBest,
-        onFinish: (score) {
-          if (mounted) {
-            setState(() {
-              if (ranked && score > best) {
-                best = score;
-              }
-              if (!ranked && score > huntBest) {
-                huntBest = score;
-              }
-            });
-          }
-        })));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final pages = <Widget>[
-      ListView(padding: const EdgeInsets.all(20), children: [
-        const SizedBox(height: 25),
-        const Center(child: Text('⚡ BATTLE TAP', style: TextStyle(fontSize: 31, fontWeight: FontWeight.w900, color: Color(0xFFFFD466)))),
-        const SizedBox(height: 32),
-        _panel('YOUR PERSONAL BEST', '$best TAPS', 'Local practice record'),
-        const SizedBox(height: 22),
-        _mode('TAP BATTLE', '30 SECONDS  •  44% FIXED BUTTON', Icons.touch_app, () => play(true)),
-        const SizedBox(height: 16),
-        _mode('RANDOM HUNT', '18–60 SECONDS  •  MOVING TARGET', Icons.track_changes, () => play(false)),
-        const SizedBox(height: 20),
-        const Center(child: Text('LOCAL TEST BUILD • ONLINE FEATURES NOT CONNECTED', style: TextStyle(fontSize: 10, color: Colors.white54))),
-      ]),
-      ListView(padding: const EdgeInsets.all(20), children: [
-        const Text('LEADERBOARDS', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 20),
-        _panel('GLOBAL / COUNTRY / FRIENDS', 'Coming with Firebase', 'Ranked scores must be verified server-side. Local scores are not published.'),
-      ]),
-      ListView(padding: const EdgeInsets.all(16), children: [
-        const Text('BATTLE SHOP', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-        const Text('15 cosmetic skins. Payment activation requires store configuration.', style: TextStyle(color: Colors.white60)),
-        const SizedBox(height: 15),
-        ...List.generate(skins.length, (i) {
-          final s = skins[i];
-          return Card(child: ListTile(
-            leading: Container(width: 43, height: 43, decoration: BoxDecoration(
-              shape: BoxShape.circle, color: s.color, boxShadow: [BoxShadow(color: s.color.withValues(alpha: 0.5), blurRadius: s.rarity == 'NORMAL' ? 5 : 20)])),
-            title: Text(s.name),
-            subtitle: Text('${s.rarity}  •  ${s.price == 0 ? 'FREE' : 'CHF ${s.price.toStringAsFixed(2)}'}'),
-            trailing: TextButton(
-              onPressed: owned.contains(i) ? () => setState(() => equipped = i) : null,
-              child: Text(owned.contains(i) ? (equipped == i ? 'EQUIPPED' : 'EQUIP') : 'LOCKED'),
-            ),
-          ));
-        }),
-      ]),
-      ListView(padding: const EdgeInsets.all(20), children: [
-        const Text('FRIENDS', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 20),
-        _panel('FRIEND CHALLENGES', 'Firebase required', 'Friend requests and online score challenges are not yet enabled.'),
-      ]),
-      ListView(padding: const EdgeInsets.all(20), children: [
-        const Text('PROFILE', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 20),
-        _panel('TAP BATTLE', '$best', 'Local personal best'),
-        _panel('RANDOM HUNT', '$huntBest', 'Local personal best'),
-        _panel('ACCOUNT', 'Not connected', 'Firebase authentication still needs configuration.'),
-      ]),
-    ];
-    return Scaffold(body: SafeArea(child: pages[tab]), bottomNavigationBar: NavigationBar(
-      selectedIndex: tab, onDestinationSelected: (index) => setState(() => tab = index),
-      destinations: const [
-        NavigationDestination(icon: Icon(Icons.sports_esports), label: 'PLAY'),
-        NavigationDestination(icon: Icon(Icons.leaderboard), label: 'RANKS'),
-        NavigationDestination(icon: Icon(Icons.shopping_bag), label: 'SHOP'),
-        NavigationDestination(icon: Icon(Icons.people), label: 'FRIENDS'),
-        NavigationDestination(icon: Icon(Icons.person), label: 'PROFILE'),
-      ],
-    ));
-  }
-
-  Widget _panel(String title, String value, String subtitle) => Card(
-    child: Padding(padding: const EdgeInsets.all(18), child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [Text(title, style: const TextStyle(color: Color(0xFFFFD466), fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8), Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4), Text(subtitle, style: const TextStyle(color: Colors.white60))],
-    )),
-  );
-  Widget _mode(String title, String subtitle, IconData icon, VoidCallback onTap) => Card(
-    child: InkWell(onTap: onTap, borderRadius: BorderRadius.circular(16),
-      child: Padding(padding: const EdgeInsets.all(20), child: Row(children: [
-        Icon(icon, size: 38, color: const Color(0xFFFFD466)), const SizedBox(width: 16),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4), Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.white60)),
-        ])), const Icon(Icons.arrow_forward_ios),
-      ]))),
-  );
-}
-
-class BattleGame extends StatefulWidget {
-  const BattleGame({super.key, required this.ranked, required this.skin, required this.best, required this.onFinish});
-  final bool ranked;
-  final BattleSkin skin;
-  final int best;
-  final ValueChanged<int> onFinish;
-  @override
-  State<BattleGame> createState() => _BattleGameState();
-}
-
-enum RoundPhase { ready, countdown, playing, stop, finished }
-
-class _BattleGameState extends State<BattleGame> with SingleTickerProviderStateMixin {
-  final _rng = Random.secure();
-  final _watch = Stopwatch();
-  Timer? _ticker;
-  RoundPhase phase = RoundPhase.ready;
-  int countdown = 3, score = 0, hits = 0, misses = 0, lateTaps = 0;
-  int duration = BattleRules.rankedSeconds;
-  int _lastMove = 0;
-  Offset target = const Offset(0.5, 0.5);
-  int? _activePointer;
-  double secondsLeft = 30;
-  late final AnimationController glow;
+class _BattleTapAppState extends State<BattleTapApp> {
+  final GameRecords records = GameRecords();
 
   @override
   void initState() {
     super.initState();
-    duration = widget.ranked ? BattleRules.rankedSeconds : BattleRules.randomDuration(_rng);
-    secondsLeft = duration.toDouble();
-    glow = AnimationController(vsync: this, duration: const Duration(milliseconds: 950))..repeat(reverse: true);
+    unawaited(records.load());
   }
 
   @override
-  void dispose() { _ticker?.cancel(); _watch.stop(); glow.dispose(); super.dispose(); }
+  void dispose() {
+    records.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: 'Battle Tap',
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: ArcadeColors.bg,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: ArcadeColors.neon,
+        brightness: Brightness.dark,
+      ),
+      fontFamily: 'monospace',
+      useMaterial3: true,
+    ),
+    home: ArcadeHome(records: records),
+  );
+}
+
+class ArcadeHome extends StatefulWidget {
+  const ArcadeHome({super.key, required this.records});
+  final GameRecords records;
+
+  @override
+  State<ArcadeHome> createState() => _ArcadeHomeState();
+}
+
+class _ArcadeHomeState extends State<ArcadeHome> {
+  void openPage(Widget page) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+
+  void openGame(bool ranked) {
+    openPage(BattleGamePage(
+      ranked: ranked,
+      skin: BattleSkins.at(0),
+      best: ranked ? widget.records.rankedBest : widget.records.huntBest,
+      vibrate: widget.records.vibrationsEnabled,
+      onFinish: (score, hits) => widget.records.record(
+        ranked: ranked, score: score, hits: hits),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: RetroBackground(
+      child: SafeArea(child: AnimatedBuilder(
+        animation: widget.records,
+        builder: (context, _) => LayoutBuilder(
+          builder: (context, c) => SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(22, 24, 22, 35),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: math.max(0, c.maxHeight - 59)),
+              child: Column(children: [
+                const SizedBox(height: 13),
+                const Icon(Icons.sports_martial_arts,
+                  size: 36, color: ArcadeColors.neon),
+                const SizedBox(height: 14),
+                const _BattleLogo(),
+                const SizedBox(height: 13),
+                const RetroText('PIXEL ARCADE • REACTION BATTLE',
+                  size: 11, color: ArcadeColors.muted, align: TextAlign.center),
+                const SizedBox(height: 27),
+                RetroPanel(child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const RetroText('LOCAL BEST', size: 11, color: ArcadeColors.muted),
+                      const SizedBox(height: 5),
+                      RetroText(widget.records.rankedBest.toString() + ' TAPS',
+                        size: 21, color: ArcadeColors.neon),
+                    ]),
+                    const Icon(Icons.emoji_events, size: 32, color: ArcadeColors.gold),
+                  ],
+                )),
+                const SizedBox(height: 26),
+                RetroAction(label: 'PLAY', icon: Icons.play_arrow,
+                  primary: true, onTap: () => openPage(ModeSelectPage(onPlay: openGame))),
+                const SizedBox(height: 17),
+                RetroAction(label: 'RANKS', icon: Icons.emoji_events,
+                  onTap: () => openPage(const RankingsPage())),
+                const SizedBox(height: 14),
+                RetroAction(label: 'SHOP', icon: Icons.storefront,
+                  onTap: () => openPage(const BattleShopPage())),
+                const SizedBox(height: 14),
+                RetroAction(label: 'FRIENDS', icon: Icons.people,
+                  onTap: () => openPage(const FriendsPage())),
+                const SizedBox(height: 14),
+                RetroAction(label: 'PROFILE', icon: Icons.person,
+                  onTap: () => openPage(ProfilePage(records: widget.records))),
+                const SizedBox(height: 20),
+                const RetroText('PREVIEW BUILD • LOCAL SCORES',
+                  size: 10, color: ArcadeColors.muted, align: TextAlign.center),
+              ]),
+            ),
+          ),
+        ),
+      )),
+    ),
+  );
+}
+
+class _BattleLogo extends StatelessWidget {
+  const _BattleLogo();
+  @override
+  Widget build(BuildContext context) => Transform.rotate(
+    angle: -.015,
+    child: RetroPanel(glow: true, highlight: true,
+      padding: const EdgeInsets.symmetric(horizontal: 19, vertical: 18),
+      child: const Column(children: [
+        RetroText('BATTLE', size: 41, color: ArcadeColors.dark, spacing: -1.5,
+          align: TextAlign.center),
+        RetroText('TAP', size: 58, color: ArcadeColors.dark, spacing: 1,
+          align: TextAlign.center),
+        Icon(Icons.touch_app, color: ArcadeColors.dark, size: 32),
+      ]),
+    ),
+  );
+}
+
+class ModeSelectPage extends StatelessWidget {
+  const ModeSelectPage({super.key, required this.onPlay});
+  final ValueChanged<bool> onPlay;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: RetroBackground(child: SafeArea(child: Column(children: [
+      RetroHeader(title: 'SELECT MODE', onBack: () => Navigator.pop(context)),
+      Expanded(child: ListView(padding: const EdgeInsets.all(20), children: [
+        RetroPanel(glow: true, child: Column(children: [
+          const Icon(Icons.ads_click, color: ArcadeColors.neon, size: 48),
+          const SizedBox(height: 10),
+          const RetroText('TAP BATTLE', size: 26, color: ArcadeColors.neon),
+          const SizedBox(height: 9),
+          const RetroText('30 SECONDS • FIXED TARGET • 44% WIDTH',
+            size: 11, align: TextAlign.center, color: ArcadeColors.muted),
+          const SizedBox(height: 15),
+          RetroAction(label: 'START BATTLE', icon: Icons.play_arrow,
+            primary: true, onTap: () => onPlay(true)),
+        ])),
+        const SizedBox(height: 20),
+        RetroPanel(child: Column(children: [
+          const Icon(Icons.track_changes, color: ArcadeColors.neon, size: 48),
+          const SizedBox(height: 10),
+          const RetroText('RANDOM HUNT', size: 26, color: ArcadeColors.neon),
+          const SizedBox(height: 9),
+          const RetroText('18–60 SEC • MOVING TARGET • −2 LATE TAP',
+            size: 11, align: TextAlign.center, color: ArcadeColors.muted),
+          const SizedBox(height: 15),
+          RetroAction(label: 'START HUNT', icon: Icons.play_arrow,
+            onTap: () => onPlay(false)),
+        ])),
+        const SizedBox(height: 20),
+        const RetroText('Online ranked sessions will be activated after '
+          'secure server verification is connected.',
+          size: 10, color: ArcadeColors.muted, align: TextAlign.center),
+      ])),
+    ]))),
+  );
+}
+
+class RankingsPage extends StatefulWidget {
+  const RankingsPage({super.key});
+  @override
+  State<RankingsPage> createState() => _RankingsPageState();
+}
+
+class _RankingsPageState extends State<RankingsPage> {
+  int selected = 0;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: RetroBackground(child: SafeArea(child: Column(children: [
+      RetroHeader(title: 'RANKINGS', onBack: () => Navigator.pop(context)),
+      Padding(padding: const EdgeInsets.all(16), child: Row(
+        children: List.generate(3, (i) => Expanded(child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3),
+          child: RetroAction(
+            compact: true,
+            label: const ['GLOBAL', 'COUNTRY', 'FRIENDS'][i],
+            icon: const [Icons.public, Icons.flag, Icons.people][i],
+            primary: selected == i,
+            onTap: () => setState(() => selected = i),
+          ),
+        ))),
+      )),
+      const Spacer(),
+      const Icon(Icons.emoji_events_outlined, size: 92, color: ArcadeColors.border),
+      const SizedBox(height: 18),
+      const RetroText('ONLINE RANKS', size: 25, color: ArcadeColors.neon),
+      const SizedBox(height: 10),
+      const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 35),
+        child: RetroText('Requires Firebase, verified game sessions and '
+          'anti-cheat checks. No fake rankings will be shown.',
+          size: 13, color: ArcadeColors.muted, align: TextAlign.center),
+      ),
+      const Spacer(),
+      const Padding(
+        padding: EdgeInsets.all(20),
+        child: RetroText('WEEKLY  •  ALL TIME',
+          color: ArcadeColors.muted, size: 12, align: TextAlign.center),
+      ),
+    ]))),
+  );
+}
+
+class FriendsPage extends StatelessWidget {
+  const FriendsPage({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: RetroBackground(child: SafeArea(child: Column(children: [
+      RetroHeader(title: 'FRIENDS', onBack: () => Navigator.pop(context)),
+      const Spacer(),
+      const Icon(Icons.group_add, color: ArcadeColors.neon, size: 95),
+      const SizedBox(height: 18),
+      const RetroText('FRIEND BATTLES', color: ArcadeColors.neon, size: 23),
+      const SizedBox(height: 12),
+      const Padding(padding: EdgeInsets.symmetric(horizontal: 34),
+        child: RetroText('Player tags, friend requests and challenges '
+          'will unlock after Firebase integration.',
+          color: ArcadeColors.muted, size: 13, align: TextAlign.center)),
+      const Spacer(),
+    ]))),
+  );
+}
+
+class ProfilePage extends StatelessWidget {
+  const ProfilePage({super.key, required this.records});
+  final GameRecords records;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: RetroBackground(child: SafeArea(child: Column(children: [
+      RetroHeader(title: 'PROFILE', onBack: () => Navigator.pop(context)),
+      Expanded(child: AnimatedBuilder(
+        animation: records,
+        builder: (context, _) => ListView(padding: const EdgeInsets.all(20), children: [
+          const RetroPanel(glow: true, child: Column(children: [
+            Icon(Icons.account_circle, color: ArcadeColors.neon, size: 60),
+            SizedBox(height: 10),
+            RetroText('LOCAL PLAYER', size: 23, color: ArcadeColors.neon),
+            SizedBox(height: 5),
+            RetroText('Account registration is not connected yet.',
+              size: 11, color: ArcadeColors.muted, align: TextAlign.center),
+          ])),
+          const SizedBox(height: 22),
+          _stat('TAP BATTLE BEST', records.rankedBest.toString()),
+          _stat('RANDOM HUNT BEST', records.huntBest.toString()),
+          _stat('ROUNDS PLAYED', records.rounds.toString()),
+          _stat('VALID TAPS', records.totalTaps.toString()),
+          const SizedBox(height: 15),
+          RetroPanel(child: SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const RetroText('VIBRATION', size: 14),
+            value: records.vibrationsEnabled,
+            onChanged: records.toggleVibration,
+          )),
+        ]),
+      )),
+    ]))),
+  );
+
+  Widget _stat(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: RetroPanel(child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+      Expanded(child: RetroText(label, size: 13, color: ArcadeColors.muted)),
+      RetroText(value, size: 23, color: ArcadeColors.neon),
+    ])),
+  );
+}
+
+class BattleShopPage extends StatefulWidget {
+  const BattleShopPage({super.key});
+  @override
+  State<BattleShopPage> createState() => _BattleShopPageState();
+}
+
+class _BattleShopPageState extends State<BattleShopPage> {
+  SkinTier tier = SkinTier.legend;
+
+  @override
+  Widget build(BuildContext context) {
+    final collection = BattleSkins.all.where((s) =>
+      s.tier == tier || (tier == SkinTier.normal && s.tier == SkinTier.classic)).toList();
+    return Scaffold(
+      body: RetroBackground(
+        child: SafeArea(child: Column(children: [
+          RetroHeader(title: 'BATTLE SHOP',
+            onBack: () => Navigator.pop(context),
+            trailing: const Icon(Icons.diamond, color: ArcadeColors.neon)),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 17),
+            child: Row(children: [
+              for (final choice in const [SkinTier.normal, SkinTier.epic, SkinTier.legend])
+                Expanded(child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: RetroAction(
+                    compact: true,
+                    label: choice.name.toUpperCase(),
+                    icon: choice == SkinTier.legend ? Icons.auto_awesome :
+                      choice == SkinTier.epic ? Icons.bolt : Icons.star_border,
+                    primary: tier == choice,
+                    onTap: () => setState(() => tier = choice),
+                  ),
+                )),
+            ]),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 5),
+            child: RetroText('TAP ANY SKIN TO PREVIEW ITS EFFECTS',
+              color: ArcadeColors.muted, size: 10, align: TextAlign.center),
+          ),
+          Expanded(child: LayoutBuilder(builder: (context, constraints) {
+            const gap = 12.0;
+            const padding = 16.0;
+            final width = (constraints.maxWidth - padding * 2 - gap) / 2;
+            return GridView.builder(
+              padding: const EdgeInsets.fromLTRB(padding, 12, padding, 30),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: gap,
+                mainAxisSpacing: gap,
+                mainAxisExtent: math.max(202, width + 72),
+              ),
+              itemCount: collection.length,
+              itemBuilder: (_, i) => _SkinShopTile(skin: collection[i]),
+            );
+          })),
+        ])),
+      ),
+    );
+  }
+}
+
+class _SkinShopTile extends StatelessWidget {
+  const _SkinShopTile({required this.skin});
+  final BattleSkin skin;
+
+  void preview(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Dialog(
+      backgroundColor: ArcadeColors.bg,
+      insetPadding: const EdgeInsets.all(22),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          RetroText(skin.name, size: 21,
+            color: skin.accent, align: TextAlign.center),
+          const SizedBox(height: 9),
+          RetroText(skin.tierName, size: 13,
+            color: ArcadeColors.muted),
+          const SizedBox(height: 20),
+          SkinEmblem(skin: skin, size: 240),
+          const SizedBox(height: 17),
+          if (skin.id != 0)
+            RetroText('CHF ' + skin.price.toStringAsFixed(2) + ' • PREVIEW ONLY',
+              size: 12, color: ArcadeColors.gold),
+          const SizedBox(height: 10),
+          RetroText(skin.id == 0 ? 'FREE STANDARD SKIN' :
+            'Store purchases not connected in this test build.',
+            size: 11, color: ArcadeColors.muted, align: TextAlign.center),
+          const SizedBox(height: 18),
+          RetroAction(label: 'CLOSE', icon: Icons.close,
+            compact: true, onTap: () => Navigator.pop(dialogContext)),
+        ]),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => preview(context),
+      child: RetroPanel(glow: skin.tier == SkinTier.legend,
+        padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
+        child: Column(children: [
+          Expanded(child: FittedBox(
+            fit: BoxFit.contain,
+            child: SkinEmblem(skin: skin, size: 133),
+          )),
+          const SizedBox(height: 4),
+          RetroText(skin.name, size: 11, align: TextAlign.center, maxLines: 2,
+            color: skin.accent),
+          const SizedBox(height: 4),
+          RetroText(skin.id == 0 ? 'EQUIPPED' :
+            'CHF ' + skin.price.toStringAsFixed(2),
+            size: 10, align: TextAlign.center,
+            color: skin.id == 0 ? ArcadeColors.neon : ArcadeColors.gold),
+        ]),
+      ),
+    );
+  }
+}
+
+enum GamePhase { ready, countdown, active, stop, finished, interrupted }
+
+class BattleGamePage extends StatefulWidget {
+  const BattleGamePage({
+    super.key,
+    required this.ranked,
+    required this.skin,
+    required this.best,
+    required this.vibrate,
+    required this.onFinish,
+  });
+  final bool ranked;
+  final BattleSkin skin;
+  final int best;
+  final bool vibrate;
+  final void Function(int score, int hits) onFinish;
+
+  @override
+  State<BattleGamePage> createState() => _BattleGamePageState();
+}
+
+class _BattleGamePageState extends State<BattleGamePage> with WidgetsBindingObserver {
+  final math.Random _rng = math.Random.secure();
+  final Stopwatch _clock = Stopwatch();
+  Timer? _frameTimer;
+  Timer? _countdownTimer;
+  GamePhase _phase = GamePhase.ready;
+  int _countdown = 3;
+  int _duration = BattleRules.rankedSeconds;
+  int _score = 0, _hits = 0, _misses = 0, _lateTaps = 0;
+  int _lastMovedMs = 0;
+  int _best = 0;
+  int? _pointer;
+  double _secondsLeft = 30;
+  Offset _target = const Offset(.5, .5);
+  bool _pressed = false, _showSplash = false, _newRecord = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _best = widget.best;
+    _duration = widget.ranked
+      ? BattleRules.rankedSeconds : BattleRules.randomDuration(_rng);
+    _secondsLeft = _duration.toDouble();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed &&
+        (_phase == GamePhase.active || _phase == GamePhase.countdown ||
+         _phase == GamePhase.stop)) {
+      _countdownTimer?.cancel();
+      _frameTimer?.cancel();
+      _clock.stop();
+      if (mounted) setState(() {
+        _phase = GamePhase.interrupted;
+        _showSplash = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _frameTimer?.cancel();
+    _countdownTimer?.cancel();
+    _clock.stop();
+    super.dispose();
+  }
 
   void _start() {
-    _ticker?.cancel();
-    _watch.reset();
-    setState(() { score = 0; hits = 0; misses = 0; lateTaps = 0; countdown = 3; phase = RoundPhase.countdown;
-      duration = widget.ranked ? BattleRules.rankedSeconds : BattleRules.randomDuration(_rng);
-      secondsLeft = duration.toDouble(); target = const Offset(0.5, 0.5); });
-    _ticker = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) { return; }
-      if (countdown > 1) { setState(() => countdown--); }
-      else {
-        timer.cancel(); _watch.start(); _lastMove = 0;
-        setState(() { countdown = 0; phase = RoundPhase.playing; });
-        _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) => _tick());
+    _frameTimer?.cancel();
+    _countdownTimer?.cancel();
+    _clock..stop()..reset();
+    setState(() {
+      _countdown = 3;
+      _score = 0;
+      _hits = 0;
+      _misses = 0;
+      _lateTaps = 0;
+      _target = const Offset(.5, .5);
+      _duration = widget.ranked
+        ? BattleRules.rankedSeconds : BattleRules.randomDuration(_rng);
+      _secondsLeft = _duration.toDouble();
+      _lastMovedMs = 0;
+      _pointer = null;
+      _pressed = false;
+      _showSplash = false;
+      _newRecord = false;
+      _phase = GamePhase.countdown;
+    });
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _phase != GamePhase.countdown) {
+        timer.cancel();
+        return;
+      }
+      if (_countdown > 1) {
+        setState(() => _countdown--);
+      } else {
+        timer.cancel();
+        _clock.start();
+        setState(() => _phase = GamePhase.active);
+        _frameTimer = Timer.periodic(
+          const Duration(milliseconds: 16), (_) => _tick());
       }
     });
   }
 
   void _tick() {
-    if (!mounted || (phase != RoundPhase.playing && phase != RoundPhase.stop)) { return; }
-    final elapsed = _watch.elapsedMilliseconds;
-    if (phase == RoundPhase.playing) {
-      final remaining = max(0, duration * 1000 - elapsed);
+    if (!mounted) return;
+    final elapsed = _clock.elapsedMilliseconds;
+    if (_phase == GamePhase.active) {
+      final remaining = math.max(0, _duration * 1000 - elapsed);
       if (remaining == 0) {
-        setState(() { secondsLeft = 0; phase = widget.ranked ? RoundPhase.finished : RoundPhase.stop; });
-        if (widget.ranked) { _finish(); }
+        setState(() {
+          _secondsLeft = 0;
+          _pressed = false;
+          _phase = widget.ranked ? GamePhase.finished : GamePhase.stop;
+        });
+        if (widget.ranked) _finish();
         return;
       }
-      if (!widget.ranked && elapsed - _lastMove >= BattleRules.randomMoveMilliseconds) {
-        _moveTarget(elapsed);
+      if (!widget.ranked &&
+          elapsed - _lastMovedMs >= BattleRules.randomMoveMilliseconds) {
+        _move(elapsed);
       }
-      setState(() => secondsLeft = remaining / 1000);
-    } else if (elapsed >= (duration + BattleRules.stopSeconds) * 1000) {
+      setState(() => _secondsLeft = remaining / 1000);
+    } else if (_phase == GamePhase.stop &&
+        elapsed >= (_duration + BattleRules.stopSeconds) * 1000) {
       _finish();
     }
   }
 
-  void _moveTarget(int elapsed) {
-    Offset next;
-    var tries = 0;
-    do { next = Offset(0.14 + _rng.nextDouble() * 0.72, 0.14 + _rng.nextDouble() * 0.72); tries++; }
-    while ((next - target).distance < 0.22 && tries < 24);
-    setState(() { target = next; _lastMove = elapsed; });
+  void _move(int nowMs) {
+    Offset next = _target;
+    var attempts = 0;
+    do {
+      next = Offset(_rng.nextDouble(), _rng.nextDouble());
+      attempts++;
+    } while ((next - _target).distance < .25 && attempts < 25);
+    _target = next;
+    _lastMovedMs = nowMs;
   }
 
   void _finish() {
-    if (phase == RoundPhase.finished && _ticker == null) { return; }
-    _ticker?.cancel(); _ticker = null; _watch.stop();
-    if (mounted) { setState(() => phase = RoundPhase.finished); }
-    widget.onFinish(score);
+    if (_phase == GamePhase.interrupted ||
+        (_phase == GamePhase.finished && _frameTimer == null)) return;
+    _frameTimer?.cancel();
+    _frameTimer = null;
+    _clock.stop();
+    _newRecord = widget.ranked && _score > _best;
+    if (_newRecord) _best = _score;
+    widget.onFinish(_score, _hits);
+    if (mounted) setState(() {
+      _phase = GamePhase.finished;
+      _showSplash = _newRecord;
+    });
   }
 
-  void _tapDown(PointerDownEvent event, Size arena, double diameter) {
-    if (_activePointer != null) { return; }
-    _activePointer = event.pointer;
-    if (phase == RoundPhase.stop && !widget.ranked) {
-      setState(() { lateTaps++; score -= BattleRules.lateTapPenalty; });
+  Offset _center(Size area, double diameter) {
+    if (widget.ranked) {
+      return Offset(area.width / 2, area.height / 2);
+    }
+    final inset = diameter / 2 + 8;
+    return Offset(
+      inset + _target.dx * math.max(0, area.width - inset * 2),
+      inset + _target.dy * math.max(0, area.height - inset * 2),
+    );
+  }
+
+  void _pointerDown(PointerDownEvent e, Size area, double diameter) {
+    if (_pointer != null) return; // One concurrent touch maximum.
+    _pointer = e.pointer;
+    if (_phase == GamePhase.stop && !widget.ranked) {
+      // Every new tap anywhere in the arena after STOP costs two points.
+      setState(() {
+        _lateTaps++;
+        _score = BattleRules.huntScore(_hits, _lateTaps);
+      });
+      if (widget.vibrate) HapticFeedback.selectionClick();
       return;
     }
-    if (phase != RoundPhase.playing) { return; }
-    final center = widget.ranked ? Offset(arena.width / 2, arena.height / 2)
-      : Offset(target.dx * arena.width, target.dy * arena.height);
-    final isHit = (event.localPosition - center).distance <= diameter / 2;
-    if (isHit) {
-      setState(() { hits++; score++; });
-      if (!widget.ranked) { _moveTarget(_watch.elapsedMilliseconds); }
+    if (_phase != GamePhase.active) return;
+    if (_clock.elapsedMilliseconds >= _duration * 1000) {
+      _tick();
+      if (_phase == GamePhase.stop) {
+        setState(() {
+          _lateTaps++;
+          _score = BattleRules.huntScore(_hits, _lateTaps);
+        });
+      }
+      return;
+    }
+    final inTarget = (e.localPosition - _center(area, diameter)).distance
+        <= diameter / 2;
+    if (inTarget) {
+      setState(() {
+        _hits++;
+        _score++;
+        _pressed = true;
+        if (!widget.ranked) _move(_clock.elapsedMilliseconds);
+      });
+      if (widget.vibrate && _hits % 5 == 0) HapticFeedback.selectionClick();
     } else if (!widget.ranked) {
-      setState(() => misses++);
+      setState(() => _misses++);
+    }
+  }
+
+  void _pointerEnd(int id) {
+    if (_pointer == id) {
+      _pointer = null;
+      if (_pressed && mounted) setState(() => _pressed = false);
     }
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.ranked ? 'TAP BATTLE' : 'RANDOM HUNT')),
-    body: SafeArea(child: Column(children: [
-      const SizedBox(height: 12),
-      Text('TIME LEFT: ${secondsLeft.toStringAsFixed(2)}', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
-      Text('SCORE: $score', style: const TextStyle(fontSize: 34, color: Color(0xFFFFD466), fontWeight: FontWeight.bold)),
-      Expanded(child: LayoutBuilder(builder: (context, constraints) {
-        final area = Size(constraints.maxWidth, constraints.maxHeight);
-        final d = widget.ranked ? area.width * BattleRules.rankedButtonWidthRatio : min(area.width * 0.20, area.height * 0.18);
-        final px = widget.ranked ? area.width / 2 : target.dx * area.width;
-        final py = widget.ranked ? area.height / 2 : target.dy * area.height;
-        return Listener(
-          behavior: HitTestBehavior.opaque,
-          onPointerDown: (e) => _tapDown(e, area, d),
-          onPointerUp: (e) { if (_activePointer == e.pointer) { _activePointer = null; } },
-          onPointerCancel: (e) { if (_activePointer == e.pointer) { _activePointer = null; } },
-          child: Stack(children: [
-            if (phase == RoundPhase.playing) Positioned(
-              left: px - d / 2, top: py - d / 2, width: d, height: d,
-              child: AnimatedBuilder(animation: glow, builder: (context, child) =>
-                DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [widget.skin.color, widget.skin.color.withValues(alpha: 0.7), const Color(0xFF181821)]),
-                  border: Border.all(color: widget.skin.color.withValues(alpha: 0.9), width: 4),
-                  boxShadow: [BoxShadow(color: widget.skin.color.withValues(alpha: widget.skin.rarity == 'FREE' ? 0.2 : (0.2 + glow.value * 0.65)), blurRadius: 15 + glow.value * 24, spreadRadius: 4)]),
-                  child: const Center(child: Text('TAP!', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 23, color: Colors.white))))),
-            ),
-            if (phase != RoundPhase.playing)
-              Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Text(switch (phase) {
-                  RoundPhase.ready => 'READY?',
-                  RoundPhase.countdown => '$countdown',
-                  RoundPhase.stop => 'STOP!  −2 PER TAP',
-                  RoundPhase.finished => score > widget.best && widget.ranked ? '🏆 NEW RECORD!' : 'BATTLE COMPLETE',
-                  _ => '',
-                }, textAlign: TextAlign.center, style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900,
-                  color: phase == RoundPhase.stop ? Colors.redAccent : const Color(0xFFFFD466))),
-                if (phase == RoundPhase.finished) ...[
-                  const SizedBox(height: 12), Text('$score POINTS', style: const TextStyle(fontSize: 30)),
-                  if (!widget.ranked) Text('$hits hits · $misses misses · $lateTaps late taps'),
-                  const SizedBox(height: 24), FilledButton(onPressed: _start, child: const Text('PLAY AGAIN')),
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('BACK TO MENU')),
-                ],
-                if (phase == RoundPhase.ready) ...[
-                  const SizedBox(height: 20), FilledButton(onPressed: _start, child: const Text('START')),
-                ],
-              ])),
+    body: Stack(children: [
+      RetroBackground(showLand: false, child: SafeArea(child: Column(children: [
+        RetroHeader(
+          title: widget.ranked ? 'TAP BATTLE' : 'RANDOM HUNT',
+          onBack: () => Navigator.pop(context),
+          trailing: const Icon(Icons.bolt, color: ArcadeColors.neon)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          child: Row(children: [
+            _metric('BEST', _best.toString(), 1),
+            const SizedBox(width: 7),
+            _metric('SCORE', _score.toString(), 1.25),
+            const SizedBox(width: 7),
+            _metric('TIME', _secondsLeft.toStringAsFixed(2), 1.1),
           ]),
-        );
-      })),
-      const SizedBox(height: 8),
-      Text('PERSONAL BEST: ${widget.best}', style: const TextStyle(color: Colors.white60)),
-      const SizedBox(height: 12),
-    ])),
+        ),
+        Expanded(child: LayoutBuilder(builder: (context, constraints) {
+          final area = Size(constraints.maxWidth, constraints.maxHeight);
+          final diameter = widget.ranked
+            ? area.width * BattleRules.rankedButtonWidthRatio
+            : math.min(area.width * .215, math.max(62.0, area.height * .18));
+          final center = _center(area, diameter);
+          return Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (e) => _pointerDown(e, area, diameter),
+            onPointerUp: (e) => _pointerEnd(e.pointer),
+            onPointerCancel: (e) => _pointerEnd(e.pointer),
+            child: Stack(children: [
+              if (_phase == GamePhase.active)
+                Positioned(
+                  left: center.dx - diameter / 2,
+                  top: center.dy - diameter / 2,
+                  width: diameter,
+                  height: diameter,
+                  child: RepaintBoundary(child: SkinEmblem(
+                    skin: widget.skin, size: diameter, pressed: _pressed)),
+                ),
+              if (_phase != GamePhase.active)
+                Center(child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: _phaseContent(),
+                )),
+            ]),
+          );
+        })),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(8, 9, 8, 15),
+          child: RetroText('LOCAL TEST • NO ONLINE RANKING',
+            size: 10, color: ArcadeColors.muted, align: TextAlign.center)),
+      ]))),
+      if (_showSplash)
+        GoldenRecordSplash(
+          score: _score,
+          onDone: () {
+            if (mounted) setState(() => _showSplash = false);
+          },
+        ),
+    ]),
   );
+
+  Widget _metric(String label, String value, double flex) => Expanded(
+    flex: (flex * 100).round(),
+    child: RetroPanel(padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 10),
+      child: Column(children: [
+        RetroText(label, size: 11, color: ArcadeColors.muted, align: TextAlign.center),
+        const SizedBox(height: 4),
+        RetroText(value, size: 21, color: ArcadeColors.neon, align: TextAlign.center,
+          maxLines: 1, spacing: -.8),
+      ]),
+    ),
+  );
+
+  Widget _phaseContent() {
+    switch (_phase) {
+      case GamePhase.ready:
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.touch_app, size: 80, color: ArcadeColors.neon),
+          const SizedBox(height: 20),
+          const RetroText('READY?', size: 34, color: ArcadeColors.neon),
+          const SizedBox(height: 17),
+          RetroText(widget.ranked
+            ? '30 SECONDS • HIT THE FIXED TARGET'
+            : 'FOLLOW THE TARGET • STOP AT ZERO!',
+            size: 12, color: ArcadeColors.muted, align: TextAlign.center),
+          const SizedBox(height: 27),
+          RetroAction(label: 'START', icon: Icons.play_arrow,
+            primary: true, onTap: _start),
+        ]);
+      case GamePhase.countdown:
+        return RetroText(_countdown.toString(), size: 88, color: ArcadeColors.neon);
+      case GamePhase.stop:
+        return const Column(mainAxisSize: MainAxisSize.min, children: [
+          RetroText('STOP!', size: 51, color: Color(0xFFFF6359)),
+          SizedBox(height: 9),
+          RetroText('−2 PER EXTRA TAP', size: 18, color: Color(0xFFFFA59B)),
+        ]);
+      case GamePhase.finished:
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(_newRecord ? Icons.emoji_events : Icons.check_circle_outline,
+            size: 74, color: _newRecord ? ArcadeColors.gold : ArcadeColors.neon),
+          const SizedBox(height: 15),
+          RetroText(_newRecord ? 'NEW LOCAL RECORD!' : 'BATTLE COMPLETE',
+            size: 23, color: _newRecord ? ArcadeColors.gold : ArcadeColors.neon,
+            align: TextAlign.center),
+          const SizedBox(height: 16),
+          RetroText(_score.toString() + ' POINTS',
+            size: 37, color: ArcadeColors.cream, align: TextAlign.center),
+          const SizedBox(height: 12),
+          if (!widget.ranked)
+            RetroText(_hits.toString() + ' HITS  •  ' +
+              _misses.toString() + ' MISSES  •  ' +
+              _lateTaps.toString() + ' LATE',
+              size: 11, color: ArcadeColors.muted, align: TextAlign.center),
+          const SizedBox(height: 25),
+          RetroAction(label: 'PLAY AGAIN', icon: Icons.replay,
+            primary: true, onTap: _start),
+          const SizedBox(height: 12),
+          RetroAction(label: 'BACK', icon: Icons.arrow_back,
+            compact: true, onTap: () => Navigator.pop(context)),
+        ]);
+      case GamePhase.interrupted:
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          const RetroText('ROUND INTERRUPTED',
+            size: 23, color: ArcadeColors.gold, align: TextAlign.center),
+          const SizedBox(height: 14),
+          const RetroText('The app was paused. This local score was not saved.',
+            size: 12, color: ArcadeColors.muted, align: TextAlign.center),
+          const SizedBox(height: 24),
+          RetroAction(label: 'RESTART', icon: Icons.replay,
+            primary: true, onTap: _start),
+        ]);
+      case GamePhase.active:
+        return const SizedBox.shrink();
+    }
+  }
 }
